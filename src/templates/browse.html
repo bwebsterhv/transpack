@@ -1,0 +1,287 @@
+{% extends "base.html" %}
+
+{% load staticfiles %}
+{% load crispy_forms_tags %}
+
+{% block styles %}
+<link href="{% static 'site/css/dataTables.bootstrap.min.css' %}" rel="stylesheet">
+{% endblock %}
+
+{% block title %}{{ block.super }}Transmission File Browser{% endblock %}
+
+{% block navbar-left %}
+  {% include "_navbar.html" with active_link="browse" %}
+{% endblock %}
+
+{% block container %}
+
+<!-- Header -->
+<div id="sec1" class="text-page">
+  <div class="container">
+    <div class="row">
+      <div class="col-md-12 text-center">
+        <h1>{% include "_brandname.html" %}</h1>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Notifications for background tasks -->
+<div id="alert-block" class="hidden col-md-10 col-md-offset-1"></div>
+
+<!-- Basic directory info browser -->
+<div id="filebrowser" class="text-page">
+  <div class="container">
+    <div class="row">
+      <div class="col-md-12 text-center">
+        <table id="folders" class="table table-striped table-bordered" cellspacing="0" width="100%">
+          <thead>
+            <tr>
+              <th class="last-post">Timestamp</th>
+              <th>Folder Name</th>
+              <th>Size</th>
+              <th>Pack</th>
+              <th>Sync</th>
+              <th>Delete</th>
+            </tr>
+          </thead>
+          <tfoot>
+            <tr>
+              <th class="last-post">Timestamp</th>
+              <th>Folder Name</th>
+              <th>Size</th>
+              <th>Pack</th>
+              <th>Sync</th>
+              <th>Delete</th>
+            </tr>
+          </tfoot>
+          <tbody>
+          {% for folder in folders %}
+            <tr>
+              <td class="text-left" data-sort="{{ folder.timestamp|date:"c" }}">{{ folder.timestamp|date:"N j Y P" }}</td>
+              <td class="text-left"><a href="#" class="a-browse" role="button" data-browse-mode="local" data-folder="{{ folder.folder64 }}" data-toggle="modal" data-target="#modal-browse">{{ folder.name }}</a></td>
+              <td>{{ folder.size|filesizeformat }}</td>
+              <td id="cell-{{ forloop.counter }}-pack-status">
+                {% if folder.is_packed %}
+                  {% if folder.packing_in_progress %}
+                  <a href="#" class="btn btn-info disabled" role="button">
+                    Packing...
+                    <span class="glyphicon glyphicon-hourglass" aria-hidden="true"></span>
+                  </a>
+                  {% else %}
+                  <a href="#" class="btn btn-success disabled" role="button">
+                    Packed
+                    <span class="glyphicon glyphicon-ok" aria-hidden="true"></span>
+                  </a>
+                  {% endif %}
+                {% else %}
+                  <a href="#" class="a-pack btn btn-primary" role="button" data-task-folder="{{ folder.name }}" data-task-dir="{{ folder.folder64 }}" data-cell-idx="{{ forloop.counter }}">
+                    Pack It
+                    <span class="glyphicon glyphicon-compressed" aria-hidden="true"></span>
+                  </a>
+                {% endif %}
+              </td>
+              <td id="cell-{{ forloop.counter }}-upload-status">
+                {% if folder.is_packed and not folder.packing_in_progress %}
+                  {% if folder.is_uploaded %}
+                    {% if folder.upload_in_progress %}
+                    <a href="#" class="btn btn-info disabled" role="button">
+                      Uploading...
+                      <span class="glyphicon glyphicon-hourglass" aria-hidden="true"></span>
+                    </a>
+                    {% else %}
+                    <a href="#" class="btn btn-success" role="button" data-browse-mode="s3" data-folder="{{ folder.archive_name }}" data-toggle="modal" data-target="#modal-browse">
+                      Show Links
+                      <span class="glyphicon glyphicon-download-alt" aria-hidden="true"></span>
+                    </a>
+                    {% endif %}
+                  {% else %}
+                    <a href="#" class="a-upload btn btn-primary" role="button" data-task-dir="{{ folder.folder64 }}" data-cell-idx="{{ forloop.counter }}">
+                      Upload It
+                      <span class="glyphicon glyphicon-upload" aria-hidden="true"></span>
+                    </a>
+                  {% endif %}
+                {% else %}
+                  <a href="#" class="btn btn-default disabled" role="button">
+                    Packing required
+                    <span class="glyphicon glyphicon-ban-circle" aria-hidden="true"></span>
+                  </a>
+                {% endif %}
+              </td>
+              <td id="cell-{{ forloop.counter }}-delete-status">
+               <a href="#" class="a-delete btn btn-danger" role="button" data-task-folder="{{ folder.name }}" data-task-dir="{{ folder.folder64 }}" data-cell-idx="{{ forloop.counter }}">
+                 Delete
+                 <span class="glyphicon glyphicon-trash" aria-hidden="true"></span>
+                </a> 
+              </td>
+            </tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+
+{% include "_dialog.html" %}
+
+{% endblock %}
+
+{% block scripts %}
+<script src="{% static 'site/js/site.js' %}"></script>
+<script src="{% static 'site/js/jquery.dataTables.min.js' %}"></script>
+<script src="{% static 'site/js/dataTables.bootstrap.min.js' %}"></script>
+
+<script type="text/javascript">
+$(document).ready(function() {
+  var DO_POLL = false;
+
+  // Init data tables
+  $('#folders').DataTable( {
+    "pageLength": 25,
+    "order": [[ 1, "desc" ]]
+  });
+
+  // Handle tasks  
+  $('.a-browse').click(function(e) { 
+    e.preventDefault();
+    
+  });
+  $('.a-pack').click(function(e) {
+    e.preventDefault();
+    var filename = prompt("Package as: ", $(this).attr("data-task-folder"));
+    var cell_idx = $(this).attr("data-cell-idx");
+    if (filename != null) {
+      $.ajax({
+        url: "{% url 'runtask_pack' %}",
+        type: "POST",
+        data: {"folder": $(this).attr("data-task-dir"), "filename": filename},
+        success: function(res) { 
+          if(res.content.response != "okay") { 
+            alert(res.content.message);
+          } else {
+            DO_POLL = true;
+            poll(res.content.task_hash, 'pack', cell_idx, 0);
+          }
+        }
+      });
+    }
+  });
+  $('.a-upload').click(function(e) {
+    e.preventDefault();
+    var cell_idx = $(this).attr("data-cell-idx");
+    $.ajax({
+      url: "{% url 'runtask_upload' %}",
+      type: "POST",
+      data: {"folder": $(this).attr("data-task-dir")},
+      success: function(res) {
+        if(res.content.response != "okay") {
+          alert(res.content.message);
+        } else {
+          DO_POLL = true;
+          poll(res.content.task_hash, 'upload', cell_idx, 0);
+        }
+      }
+    });
+  });
+  $('.a-delete').click(function(e) {
+    e.preventDefault();
+    var cell_idx = $(this).attr("data-cell-idx");
+    var userconfirm = confirm("Confirm deletion of all files (disk and S3) of: ", $(this).attr("data-task-folder"));
+    if (userconfirm == true) {
+      $.ajax({
+        url: "{% url 'runtask_delete' %}",
+        type: "POST",
+        data: {"folder": $(this).attr("data-task-dir")},
+        success: function(res) {
+          if(res.content.response != "okay") {
+            alert(res.content.message);
+          } else {
+            DO_POLL = true;
+            poll(res.content.task_hash, 'delete', cell_idx, 0);
+          }
+        }
+      });
+    }
+  });
+
+  // Browse files modal, for showing local files or S3 download links
+  $('#modal-browse').on('show.bs.modal', function (e) {
+    var elem = $(e.relatedTarget);
+    if(elem.attr("data-browse-mode") == "s3") { 
+      $.get("{% url 'get_s3_files' %}", {'folder': elem.attr("data-folder")}, function(res) {
+        if(res.content.response != "okay") { 
+          alert(res.content.message);
+        } else {
+          $('#modal-title').html("Download files from S3");
+          if(Array.isArray(res.content.links)) { 
+            for (var i=0; i<res.content.links.length; i++) {
+              $("#modal-ul").append('<li><a href="'+res.content.links[i]+'">'+res.content.links[i]+'</a></li>');
+            }
+          }
+        }
+      });
+    } else if (elem.attr("data-browse-mode") == "local") {
+      $.get("{% url 'get_local_files' %}", {'folder': elem.attr("data-folder")}, function(res) {
+        if(res.content.response != "okay") {
+          alert(res.content.message);
+        } else {
+          $('#modal-title').html("Folder contents on disk");
+          if(Array.isArray(res.content.files)) {
+            for (var i=0; i<res.content.files.length; i++) {
+              $("#modal-ul").append('<li>'+res.content.files[i]+'</li>');
+            }
+          }
+        }
+      });
+    }
+  });
+  $('#modal-browse').on('hide.bs.modal', function (e) {
+    $('#modal-ul').empty(); 
+  });
+
+  // Status polling
+  function poll(task_hash, task_type, cell_idx, waitCount) {
+    $.ajax({
+      url: "{% url 'get_task_status' %}",
+      type: "GET",
+      data: {"task_hash": task_hash},
+      success: function(res) {
+        var hasError = false;        
+        if(typeof res.content.response != 'undefined') {
+          if(res.content.response != 'okay') { 
+            hasError = true;
+            error_msg = res.content.message;
+          } else {
+            if(res.content.completed == 'true') { 
+              window.location.href = "{% url 'browse' %}";
+            } else {             
+              if(waitCount > 60) {
+               $('#alert-block').removeClass("hidden");
+               $('#alert-block').html('<div class="alert alert-warning text-center" role="alert">Task '+task_hash+' has run for > 5 minutes.  It might be stuck or is taking a long time...<a class="alert-link" href="{% url 'browse' %}">Stop polling</a></div>');
+              }
+              $('#cell-'+cell_idx+'-'+task_type+'-status').html('<a href="#" class="btn btn-info disabled" role="button">Processing...<span class="badge">'+(waitCount*5)+'s</span></a>');
+            }            
+          }
+        } else {
+          hasError = true;
+          error_msg = "I tried to get your progress on "+task_hash+":"+task_type+" but something went horribly wrong.";
+        }
+        if(hasError) {
+          $('#alert-block').removeClass("hidden");
+          $('#alert-block').html('<div class="alert alert-error" role="alert">'+error_msg+'</div>');
+        }
+        waitCount++;
+      },
+      dataType: "json",
+      cache: false,
+      complete: setTimeout(function() {
+        if(DO_POLL) { poll(task_hash, task_type, cell_idx, waitCount) }
+      }, 5000),
+      timeout: 5000
+    });
+  }
+});
+
+</script>
+{% endblock %}
